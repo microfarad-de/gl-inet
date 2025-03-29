@@ -1,0 +1,16 @@
+#!/bin/sh
+# KHr
+#
+# This script performs an internet connection speed test using speedtest-netperf.sh
+# For more details, please visit:
+# https://github.com/openwrt/packages/blob/master/net/speedtest-netperf/files/README.md
+#
+# This script has been implemented for the GL.iNet GL-X750 series router.
+#
+# This script is located under /usr/bin/speedtest
+#
+
+speedtest-netperf.sh -H netperf-eu.bufferbloat.net
+rv=$?
+
+exit $rv

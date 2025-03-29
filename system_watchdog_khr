@@ -1,0 +1,88 @@
+#!/bin/sh
+# KHr
+#
+# This watchdog script pings the ip addresses of the configured DNS servers
+# and automatically resets the device if none of the DNS servers is reachable.
+#
+# This script has been implemented for the GL.iNet GL-X750 series router.
+#
+# This script is located under /usr/bin/system_watchdog_khr
+#
+# Run this script from cron:
+# echo '5-59/30 * * * * /usr/bin/system_watchdog_khr > /dev/null' >> /etc/crontabs/root
+
+ERR_LOG="/root/system_watchdog.errors"
+LOG="/var/log/system_watchdog.log"
+LOG_MAX=500
+STATUS="/tmp/system_watchdog.status"
+
+info_log() {
+  local text=$1
+  local stamp="$(date)"
+  echo "$stamp: $text"
+  echo "$stamp: $text" >> "$LOG"
+  logger -t "system_watchdog_khr" "$text"
+}
+
+error_log() {
+  local text=$1
+  info_log "[ERROR] $text"
+  echo "$(date): [ERROR] $text" >> "$ERR_LOG"
+}
+
+# Limit log size
+if [[ -f "$ERR_LOG" ]]; then
+  while [[ $(wc -l < "$ERR_LOG") -gt $LOG_MAX ]]; do
+    sed -i '1d' "$ERR_LOG"
+  done
+fi
+if [[ -f "$LOG" ]]; then
+  while [[ $(wc -l < "$LOG") -gt $LOG_MAX ]]; do
+    sed -i '1d' "$LOG"
+  done
+else
+  touch "$LOG"
+  info_log "System startup"
+fi
+
+result=1
+ip_list=`cat /etc/config/dhcp | grep 'list server' | awk '{print $3}'`
+
+for ip in $ip_list; do
+  ping ${ip//\'} -c4
+  rv=$?
+  if [[ $rv -eq 0 ]]; then
+    result=0
+    echo "SUCCESS" > "$STATUS"
+    info_log "Successfully pinged $ip"
+    break
+  else
+    error_log "Failed to ping $ip"
+  fi
+done
+
+if [[ $result -ne 0 ]]; then
+  status=$(cat "$STATUS")
+  if  [[ "$status" == "SUCCESS" ]]; then
+    echo "FAILURE" > "$STATUS"
+  elif [[ "$status" == "FAILURE" || "$status" == "" ]]; then
+    echo "RESET" > "$STATUS"
+    # Modem reset
+    error_log "Modem reset"
+    #echo "AT+CFUN=1,1" > /dev/ttyUSB3
+    #gl_modem AT AT+CFUN=1,1
+    echo 0 > /sys/class/gpio/pci_power/value
+    sleep 5
+    echo 1 > /sys/class/gpio/pci_power/value
+    sleep 10
+    #gl_modem connect-auto         # Firmware 3.x
+    /etc/init.d/modem-init restart # Firmware 4.x
+  elif [[ "$status" == "RESET" ]]; then
+    echo "" > "$STATUS"
+    # System reboot
+    error_log "System reboot"
+    reboot
+  fi
+fi
+
+exit $result

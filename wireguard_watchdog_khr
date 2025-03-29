@@ -1,0 +1,78 @@
+#!/bin/sh
+# KHr
+#
+# This watchdog script tries to re-resolve hostnames for inactive WireGuard peers.
+# Use it for peers with a frequently changing dynamic IP.
+#
+# This script has been implemented for the GL.iNet GL-X750 series router.
+#
+# Note: This script is no longer required as of firmware version 4.0
+#
+# This script is located under /usr/bin/wireguard_watchdog_khr
+#
+# Run this script from cron:
+# echo '*/5 * * * * /usr/bin/wireguard_watchdog_khr > /dev/null' >> /etc/crontabs/root
+
+
+IFACE="wg0"
+MAX_IDLE_SECONDS=200
+
+LOG="/var/log/wireguard_watchdog.log"
+LOG_MAX=500
+
+
+info_log() {
+  local text=$1
+  local stamp="$(date)"
+  echo "$stamp: $text"
+  echo "$stamp: $text" >> "$LOG"
+  logger -t "wireguard_watchdog_khr" "$text"
+}
+
+error_log() {
+  local text=$1
+  info_log "[ERROR] $text"
+}
+
+rv=0
+
+# Limit log size
+if [[ -f "$LOG" ]]; then
+  while [[ $(wc -l < "$LOG") -gt $LOG_MAX ]]; do
+    sed -i '1d' "$LOG"
+  done
+else
+  touch "$LOG"
+  info_log "System startup"
+fi
+
+public_key=`wg show $IFACE latest-handshakes | awk '{print $1}'`
+
+if [[ "$public_key" == "" ]]; then
+  #info_log "Wireguard interface is down"
+  exit $rv;
+fi
+
+last_handshake=`wg show $IFACE latest-handshakes | awk '{print $2}'`
+idle_seconds=$((`date +%s`-$last_handshake))
+endpoint=`wg show $IFACE | grep endpoint: | awk '{print $2}'`
+
+echo "interface    : $IFACE"
+echo "endpoint     : $endpoint"
+echo "public_key   : $public_key"
+echo "idle_seconds : $idle_seconds"
+
+if [[ $idle_seconds -gt $MAX_IDLE_SECONDS ]]; then
+  info_log "Restarting Wireguard client..."
+  /etc/init.d/wireguard restart
+  #ifdown $IFACE && ifup $IFACE
+  rv=$?
+  if [[ $rv -ne 0 ]]; then
+    error_log "Failed to restart Wireguard client ($rv)"
+  else
+    endpoint=`wg show $IFACE | grep endpoint: | awk '{print $2}'`
+    info_log "Wireguard client restarted (endpoint: $endpoint)"
+  fi
+fi
+
+exit $rv

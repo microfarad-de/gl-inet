@@ -5,6 +5,9 @@
 #
 # Shows MAC, IP address and any hostname info for all connected wifi devices
 # written for openwrt 12.09 Attitude Adjustment
+#
+# BusyBox /bin/sh (ash) compatible.
+#
 
 LOG="/var/log/clients.log"
 LOG_MAX=500

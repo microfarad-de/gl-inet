@@ -19,15 +19,15 @@ STATUS="/tmp/system_watchdog.status"
 MODEM_INSTALLED=1
 
 info_log() {
-  text=$1
-  stamp=$(date)
+  local text=$1
+  local stamp=$(date)
   echo "$stamp: $text"
   echo "$stamp: $text" >> "$LOG"
   logger -t "system_watchdog_khr" "$text"
 }
 
 error_log() {
-  text=$1
+  local text=$1
   info_log "[ERROR] $text"
   echo "$(date): [ERROR] $text" >> "$ERR_LOG"
 }
@@ -51,10 +51,10 @@ system_reboot() {
 }
 
 trim_log() {
-  f=$1
+  local f=$1
   [ -f "$f" ] || return 0
 
-  lines=$(wc -l < "$f" 2>/dev/null)
+  local lines=$(wc -l < "$f" 2>/dev/null)
   [ -n "$lines" ] || return 0
 
   if [ "$lines" -gt "$LOG_MAX" ]; then

@@ -1,88 +1,116 @@
 #!/bin/sh
 # KHr
 #
-# This watchdog script pings the ip addresses of the configured DNS servers
-# and automatically resets the device if none of the DNS servers is reachable.
+# Watchdog script: pings the IP addresses of the configured DNS servers
+# and automatically resets the modem / reboots the device if none is reachable.
 #
-# This script has been implemented for the GL.iNet GL-X750 series router.
+# BusyBox /bin/sh (ash) compatible.
 #
 # This script is located under /usr/bin/system_watchdog_khr
 #
 # Run this script from cron:
 # echo '5-59/30 * * * * /usr/bin/system_watchdog_khr > /dev/null' >> /etc/crontabs/root
 
+
 ERR_LOG="/root/system_watchdog.errors"
 LOG="/var/log/system_watchdog.log"
 LOG_MAX=500
 STATUS="/tmp/system_watchdog.status"
+MODEM_INSTALLED=1
 
 info_log() {
-  local text=$1
-  local stamp="$(date)"
+  text=$1
+  stamp=$(date)
   echo "$stamp: $text"
   echo "$stamp: $text" >> "$LOG"
   logger -t "system_watchdog_khr" "$text"
 }
 
 error_log() {
-  local text=$1
+  text=$1
   info_log "[ERROR] $text"
   echo "$(date): [ERROR] $text" >> "$ERR_LOG"
 }
 
-# Limit log size
-if [[ -f "$ERR_LOG" ]]; then
-  while [[ $(wc -l < "$ERR_LOG") -gt $LOG_MAX ]]; do
-    sed -i '1d' "$ERR_LOG"
-  done
-fi
-if [[ -f "$LOG" ]]; then
-  while [[ $(wc -l < "$LOG") -gt $LOG_MAX ]]; do
-    sed -i '1d' "$LOG"
-  done
-else
-  touch "$LOG"
-  info_log "System startup"
-fi
+modem_reset() {
+  error_log "Modem reset"
+  #echo "AT+CFUN=1,1" > /dev/ttyUSB3
+  #gl_modem AT AT+CFUN=1,1
+  echo 0 > /sys/class/gpio/pci_power/value
+  sleep 5
+  echo 1 > /sys/class/gpio/pci_power/value
+  sleep 10
+  #gl_modem connect-auto         # Firmware 3.x
+  /etc/init.d/modem-init restart # Firmware 4.x
+}
+
+system_reboot() {
+  : > "$STATUS"
+  error_log "System reboot"
+  reboot
+}
+
+trim_log() {
+  f=$1
+  [ -f "$f" ] || return 0
+
+  lines=$(wc -l < "$f" 2>/dev/null)
+  [ -n "$lines" ] || return 0
+
+  if [ "$lines" -gt "$LOG_MAX" ]; then
+    tail -n "$LOG_MAX" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  fi
+}
+
+# Ensure log files exist
+[ -f "$LOG" ] || { touch "$LOG"; info_log "System startup"; }
+[ -f "$ERR_LOG" ] || touch "$ERR_LOG"
+
+# Limit log sizes
+trim_log "$ERR_LOG"
+trim_log "$LOG"
 
 result=1
-ip_list=`cat /etc/config/dhcp | grep 'list server' | awk '{print $3}'`
+
+# Read DNS servers from /etc/config/dhcp (OpenWrt-style)
+ip_list=$(grep "list server" /etc/config/dhcp 2>/dev/null | awk '{print $3}')
 
 for ip in $ip_list; do
-  ping ${ip//\'} -c4
+  # Strip single quotes if present (e.g. '1.1.1.1')
+  ip_clean=$(printf "%s" "$ip" | tr -d "'")
+
+  # Quiet ping; BusyBox-compatible
+  ping -c 4 "$ip_clean" >/dev/null 2>&1
   rv=$?
-  if [[ $rv -eq 0 ]]; then
+
+  if [ "$rv" -eq 0 ]; then
     result=0
     echo "SUCCESS" > "$STATUS"
-    info_log "Successfully pinged $ip"
+    info_log "Successfully pinged $ip_clean"
     break
   else
-    error_log "Failed to ping $ip"
+    error_log "Failed to ping $ip_clean"
   fi
 done
 
-if [[ $result -ne 0 ]]; then
-  status=$(cat "$STATUS")
-  if  [[ "$status" == "SUCCESS" ]]; then
+if [ "$result" -ne 0 ]; then
+  status=""
+  [ -f "$STATUS" ] && status=$(cat "$STATUS" 2>/dev/null)
+
+  if [ "$status" = "SUCCESS" ]; then
     echo "FAILURE" > "$STATUS"
-  elif [[ "$status" == "FAILURE" || "$status" == "" ]]; then
-    echo "RESET" > "$STATUS"
-    # Modem reset
-    error_log "Modem reset"
-    #echo "AT+CFUN=1,1" > /dev/ttyUSB3
-    #gl_modem AT AT+CFUN=1,1
-    echo 0 > /sys/class/gpio/pci_power/value
-    sleep 5
-    echo 1 > /sys/class/gpio/pci_power/value
-    sleep 10
-    #gl_modem connect-auto         # Firmware 3.x
-    /etc/init.d/modem-init restart # Firmware 4.x
-  elif [[ "$status" == "RESET" ]]; then
-    echo "" > "$STATUS"
-    # System reboot
-    error_log "System reboot"
-    reboot
+
+  elif [ "$status" = "FAILURE" ] || [ -z "$status" ]; then
+    if [ "$MODEM_INSTALLED" -eq 1 ]; then
+      echo "RESET" > "$STATUS"
+      modem_reset
+    else
+      system_reboot
+    fi
+
+  elif [ "$status" = "RESET" ]; then
+    system_reboot
   fi
 fi
 
-exit $result
+exit "$result"

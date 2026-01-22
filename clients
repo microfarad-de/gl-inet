@@ -10,42 +10,53 @@ LOG="/var/log/clients.log"
 LOG_MAX=500
 
 info_log() {
-  local text=$1
-  local stamp="$(date)"
+  text=$1
+  stamp=$(date)
   echo "$stamp: $text" >> "$LOG"
 }
 
-# Limit log size
-if [[ -f "$LOG" ]]; then
-  while [[ $(wc -l < "$LOG") -gt $LOG_MAX ]]; do
-    sed -i '1d' "$LOG"
-  done
+trim_log() {
+  f=$1
+  [ -f "$f" ] || return 0
+  lines=$(wc -l < "$f" 2>/dev/null)
+  [ -n "$lines" ] || return 0
+  if [ "$lines" -gt "$LOG_MAX" ]; then
+    tail -n "$LOG_MAX" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  fi
+}
+
+# Ensure log exists and limit size
+if [ -f "$LOG" ]; then
+  trim_log "$LOG"
 else
   touch "$LOG"
   info_log "System startup"
 fi
 
-echo    "Connected WIFI devices:"
-echo -e "IP address  \tname     \tMAC address"
+echo "Connected WIFI devices:"
+printf "IP address\tname\tMAC address\n"
+
 # list all wireless network interfaces
-# (for universal driver; see wiki article for alternative commands)
-for interface in `iwinfo | grep ESSID | cut -f 1 -s -d" "`
-do
-  # for each interface, get mac addresses of connected stations/clients
-  maclist=`iwinfo $interface assoclist | grep dBm | cut -f 1 -s -d" "`
-  # for each mac address in that list...
-  for mac in $maclist
-  do
-    # If a DHCP lease has been given out by dnsmasq,
-    # save it.
-    ip=`cat /tmp/dhcp.leases | cut -f 2,3,4 -s -d" " | grep -i $mac | cut -f 2 -s -d" "`
-    host=`cat /tmp/dhcp.leases | cut -f 2,3,4 -s -d" " | grep -i $mac | cut -f 3 -s -d" "`
-    if [[ -z $host ]]; then
-      host="     "
-    fi
-    # ... show the mac address:
-    if [[ ! -z $ip ]]; then
-      echo -e "$ip\t$host\t$mac"
+for interface in $(iwinfo 2>/dev/null | grep ESSID | cut -f 1 -s -d" "); do
+  # get mac addresses of connected stations/clients
+  maclist=$(iwinfo "$interface" assoclist 2>/dev/null | grep dBm | cut -f 1 -s -d" ")
+
+  for mac in $maclist; do
+    # Extract fields from dhcp leases (format: <expiry> <mac> <ip> <hostname> ...)
+    ip=$(awk -v m="$(echo "$mac" | tr '[:upper:]' '[:lower:]')" '
+      BEGIN{IGNORECASE=1}
+      $2==m {print $3; exit}
+    ' /tmp/dhcp.leases 2>/dev/null)
+
+    host=$(awk -v m="$(echo "$mac" | tr '[:upper:]' '[:lower:]')" '
+      BEGIN{IGNORECASE=1}
+      $2==m {print $4; exit}
+    ' /tmp/dhcp.leases 2>/dev/null)
+
+    [ -z "$host" ] && host=""
+
+    if [ -n "$ip" ]; then
+      printf "%s\t%s\t%s\n" "$ip" "$host" "$mac"
       info_log "ip=$ip host=$host mac=$mac"
     fi
   done
